@@ -1,0 +1,13 @@
+# https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+
+Language:      Cpp
+BasedOnStyle:  LLVM
+IndentWidth: 4
+
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction:         false
+  AfterControlStatement: false
+  SplitEmptyFunction:    false
+
+ColumnLimit: 100
