@@ -1,3 +1,4 @@
+#include <iostream>
 #include <math.h>
 #include <mutex>
 #include <stack>
@@ -84,7 +85,7 @@ inline double clamp(double x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 inline int toInt(double x) { return int(pow(clamp(x), 1 / 2.2) * 255 + .5); }
 
 inline bool intersect(const Ray &r, double &t, int &id) {
-    double inf = t = 1e20;
+    double inf = t = std::numeric_limits<double>::infinity();
     for (int i = int(spheres.size()); i--;) {
         double d;
         if ((d = spheres[i].intersect(r)) && d < t) {
@@ -208,9 +209,12 @@ int main(int argc, char *argv[]) {
         t.join();
     }
 
-    FILE *f = fopen("image.ppm", "w"); // Write image to PPM file.
+    std::string file_name = "image_" + std::to_string(samples * 4) + ".ppm";
+
+    FILE *f = fopen(file_name.c_str(), "w"); // Write image to PPM file.
     fprintf(f, "P3\n%d %d\n%d\n", width, height, 255);
     for (int i = 0; i < width * height; i++) {
         fprintf(f, "%d %d %d ", toInt(pixels[i].x), toInt(pixels[i].y), toInt(pixels[i].z));
     }
+    std::cout << "output to `" << file_name << "`\n\n";
 }
