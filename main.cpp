@@ -50,7 +50,9 @@ struct Sphere {
 
     double intersect(const Ray &r) const { // returns distance, 0 if nohit
         Vec op = p - r.o;                  // Solve t^2*d.d + 2*t*(o-p).d + (o-p).(o-p)-R^2 = 0
-        double t, eps = 1e-4, b = op.dot(r.d), det = b * b - op.dot(op) + rad * rad;
+        double t;
+        double eps = 1e-4, b = op.dot(r.d);
+        double det = b * b - op.dot(op) + rad * rad;
         if (det < 0) {
             return 0;
         }
@@ -150,22 +152,31 @@ Vec radiance(const Ray &r, int depth, unsigned short *Xi) {
                                           radiance(Ray(x, tdir), depth, Xi) * Tr);
 }
 
-void render(std::vector<Vec> &pixels, int samples, int w, int h) {
+void render(std::vector<Vec> &pixels, std::stack<int> &job_list, std::mutex &mtx, int samples,
+            int width, int height) {
     Ray cam(Vec(50, 52, 295.6), Vec(0, -0.042612, -1).norm()); // cam pos, dir
-    Vec cx = Vec(w * .5135 / h);
+    Vec cx = Vec(width * .5135 / height);
     Vec cy = (cx % cam.d).norm() * .5135;
     Vec r;
 
-    for (int y = 0; y < h; y++) { // Loop over image rows
-        fprintf(stderr, "\rRendering (%d spp) %5.2f%%", samples * 4, 100. * y / (h - 1));
-        for (unsigned short x = 0, Xi[3] = {0, 0, y * y * y}; x < w; x++) { // Loop cols
-            for (int sy = 0, i = (h - y - 1) * w + x; sy < 2; sy++) {       // 2x2 subpixel rows
-                for (int sx = 0; sx < 2; sx++, r = Vec()) {                 // 2x2 subpixel cols
+    while (true) {
+        mtx.lock();
+        if (job_list.empty()) {
+            mtx.unlock();
+            return;
+        }
+        auto y = job_list.top();
+        job_list.pop();
+        mtx.unlock();
+
+        for (unsigned short x = 0, Xi[3] = {0, 0, y * y * y}; x < width; x++) { // Loop cols
+            for (int sy = 0, i = (height - y - 1) * width + x; sy < 2; sy++) {  // 2x2 subpixel rows
+                for (int sx = 0; sx < 2; sx++, r = Vec()) {                     // 2x2 subpixel cols
                     for (int s = 0; s < samples; s++) {
                         double r1 = 2 * erand48(Xi), dx = r1 < 1 ? sqrt(r1) - 1 : 1 - sqrt(2 - r1);
                         double r2 = 2 * erand48(Xi), dy = r2 < 1 ? sqrt(r2) - 1 : 1 - sqrt(2 - r2);
-                        Vec d = cx * (((sx + .5 + dx) / 2 + x) / w - .5) +
-                                cy * (((sy + .5 + dy) / 2 + y) / h - .5) + cam.d;
+                        Vec d = cx * (((sx + .5 + dx) / 2 + x) / width - .5) +
+                                cy * (((sy + .5 + dy) / 2 + y) / height - .5) + cam.d;
                         r = r + radiance(Ray(cam.o + d * 140, d.norm()), 0, Xi) * (1. / samples);
                     } // Camera rays are pushed ^^^^^ forward to start in interior
                     pixels[i] = pixels[i] + Vec(clamp(r.x), clamp(r.y), clamp(r.z)) * .25;
@@ -178,9 +189,24 @@ void render(std::vector<Vec> &pixels, int samples, int w, int h) {
 int main(int argc, char *argv[]) {
     int width = 1024;
     int height = 768;
-    int samps = argc == 2 ? atoi(argv[1]) / 4 : 1; // # samples
+    int samples = argc == 2 ? atoi(argv[1]) / 4 : 1; // # samples
     auto pixels = std::vector<Vec>(width * height);
-    render(pixels, samps, width, height);
+
+    std::stack<int> job_list;
+    for (int y = 0; y < height; y++) {
+        job_list.push(y);
+    }
+
+    std::mutex mtx;
+    std::vector<std::thread> threads;
+    for (int idx = 0; idx < std::thread::hardware_concurrency() / 2; ++idx) {
+        threads.push_back(std::thread(render, std::ref(pixels), std::ref(job_list), std::ref(mtx),
+                                      samples, width, height));
+    }
+
+    for (auto &t : threads) {
+        t.join();
+    }
 
     FILE *f = fopen("image.ppm", "w"); // Write image to PPM file.
     fprintf(f, "P3\n%d %d\n%d\n", width, height, 255);
