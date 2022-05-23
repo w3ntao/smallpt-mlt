@@ -187,34 +187,36 @@ void render(std::vector<Vec> &pixels, std::stack<int> &job_list, std::mutex &mtx
     }
 }
 
-int main(int argc, char *argv[]) {
+int main() {
     int width = 1024;
     int height = 768;
-    int samples = argc == 2 ? atoi(argv[1]) / 4 : 1; // # samples
-    auto pixels = std::vector<Vec>(width * height);
 
-    std::stack<int> job_list;
-    for (int y = 0; y < height; y++) {
-        job_list.push(y);
+    for (auto samples : {10, 20, 30, 40, 50}) {
+        auto pixels = std::vector<Vec>(width * height);
+
+        std::stack<int> job_list;
+        for (int y = 0; y < height; y++) {
+            job_list.push(y);
+        }
+
+        std::mutex mtx;
+        std::vector<std::thread> threads;
+        for (int idx = 0; idx < std::thread::hardware_concurrency() / 2; ++idx) {
+            threads.push_back(std::thread(render, std::ref(pixels), std::ref(job_list),
+                                          std::ref(mtx), samples / 4, width, height));
+        }
+
+        for (auto &t : threads) {
+            t.join();
+        }
+
+        std::string file_name = "cosine_sampling_" + std::to_string(samples / 4 * 4) + ".ppm";
+
+        FILE *f = fopen(file_name.c_str(), "w"); // Write image to PPM file.
+        fprintf(f, "P3\n%d %d\n%d\n", width, height, 255);
+        for (int i = 0; i < width * height; i++) {
+            fprintf(f, "%d %d %d ", toInt(pixels[i].x), toInt(pixels[i].y), toInt(pixels[i].z));
+        }
+        std::cout << "output to `" << file_name << "`\n\n" << std::flush;
     }
-
-    std::mutex mtx;
-    std::vector<std::thread> threads;
-    for (int idx = 0; idx < std::thread::hardware_concurrency() / 2; ++idx) {
-        threads.push_back(std::thread(render, std::ref(pixels), std::ref(job_list), std::ref(mtx),
-                                      samples, width, height));
-    }
-
-    for (auto &t : threads) {
-        t.join();
-    }
-
-    std::string file_name = "image_" + std::to_string(samples * 4) + ".ppm";
-
-    FILE *f = fopen(file_name.c_str(), "w"); // Write image to PPM file.
-    fprintf(f, "P3\n%d %d\n%d\n", width, height, 255);
-    for (int i = 0; i < width * height; i++) {
-        fprintf(f, "%d %d %d ", toInt(pixels[i].x), toInt(pixels[i].y), toInt(pixels[i].z));
-    }
-    std::cout << "output to `" << file_name << "`\n\n";
 }
