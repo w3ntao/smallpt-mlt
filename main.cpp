@@ -1,7 +1,11 @@
-#include <math.h>   // smallpt, a Path Tracer by Kevin Beason, 2008
-#include <stdio.h>  //        Remove "-fopenmp" for g++ version < 4.2
-#include <stdlib.h> // Make : g++ -O3 -fopenmp smallpt.cpp -o smallpt
+#include <math.h>
+#include <mutex>
+#include <stack>
+#include <stdio.h>
+#include <stdlib.h>
+#include <thread>
 #include <vector>
+
 struct Vec {        // Usage: time ./smallpt 5000 && xv image.ppm
     double x, y, z; // position, also color (r,g,b)
     Vec(double _x = 0, double _y = 0, double _z = 0) {
@@ -146,29 +150,41 @@ Vec radiance(const Ray &r, int depth, unsigned short *Xi) {
                                           radiance(Ray(x, tdir), depth, Xi) * Tr);
 }
 
-int main(int argc, char *argv[]) {
-    int w = 1024, h = 768, samps = argc == 2 ? atoi(argv[1]) / 4 : 1; // # samples
-    Ray cam(Vec(50, 52, 295.6), Vec(0, -0.042612, -1).norm());        // cam pos, dir
-    Vec cx = Vec(w * .5135 / h), cy = (cx % cam.d).norm() * .5135, r, *c = new Vec[w * h];
+void render(std::vector<Vec> &pixels, int samples, int w, int h) {
+    Ray cam(Vec(50, 52, 295.6), Vec(0, -0.042612, -1).norm()); // cam pos, dir
+    Vec cx = Vec(w * .5135 / h);
+    Vec cy = (cx % cam.d).norm() * .5135;
+    Vec r;
 
     for (int y = 0; y < h; y++) { // Loop over image rows
-        fprintf(stderr, "\rRendering (%d spp) %5.2f%%", samps * 4, 100. * y / (h - 1));
-        for (unsigned short x = 0, Xi[3] = {0, 0, y * y * y}; x < w; x++) // Loop cols
-            for (int sy = 0, i = (h - y - 1) * w + x; sy < 2; sy++)       // 2x2 subpixel rows
-                for (int sx = 0; sx < 2; sx++, r = Vec()) {               // 2x2 subpixel cols
-                    for (int s = 0; s < samps; s++) {
+        fprintf(stderr, "\rRendering (%d spp) %5.2f%%", samples * 4, 100. * y / (h - 1));
+        for (unsigned short x = 0, Xi[3] = {0, 0, y * y * y}; x < w; x++) { // Loop cols
+            for (int sy = 0, i = (h - y - 1) * w + x; sy < 2; sy++) {       // 2x2 subpixel rows
+                for (int sx = 0; sx < 2; sx++, r = Vec()) {                 // 2x2 subpixel cols
+                    for (int s = 0; s < samples; s++) {
                         double r1 = 2 * erand48(Xi), dx = r1 < 1 ? sqrt(r1) - 1 : 1 - sqrt(2 - r1);
                         double r2 = 2 * erand48(Xi), dy = r2 < 1 ? sqrt(r2) - 1 : 1 - sqrt(2 - r2);
                         Vec d = cx * (((sx + .5 + dx) / 2 + x) / w - .5) +
                                 cy * (((sy + .5 + dy) / 2 + y) / h - .5) + cam.d;
-                        r = r + radiance(Ray(cam.o + d * 140, d.norm()), 0, Xi) * (1. / samps);
+                        r = r + radiance(Ray(cam.o + d * 140, d.norm()), 0, Xi) * (1. / samples);
                     } // Camera rays are pushed ^^^^^ forward to start in interior
-                    c[i] = c[i] + Vec(clamp(r.x), clamp(r.y), clamp(r.z)) * .25;
+                    pixels[i] = pixels[i] + Vec(clamp(r.x), clamp(r.y), clamp(r.z)) * .25;
                 }
+            }
+        }
     }
+}
+
+int main(int argc, char *argv[]) {
+    int width = 1024;
+    int height = 768;
+    int samps = argc == 2 ? atoi(argv[1]) / 4 : 1; // # samples
+    auto pixels = std::vector<Vec>(width * height);
+    render(pixels, samps, width, height);
+
     FILE *f = fopen("image.ppm", "w"); // Write image to PPM file.
-    fprintf(f, "P3\n%d %d\n%d\n", w, h, 255);
-    for (int i = 0; i < w * h; i++) {
-        fprintf(f, "%d %d %d ", toInt(c[i].x), toInt(c[i].y), toInt(c[i].z));
+    fprintf(f, "P3\n%d %d\n%d\n", width, height, 255);
+    for (int i = 0; i < width * height; i++) {
+        fprintf(f, "%d %d %d ", toInt(pixels[i].x), toInt(pixels[i].y), toInt(pixels[i].z));
     }
 }
