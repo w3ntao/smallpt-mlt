@@ -5,6 +5,8 @@
 #include <thread>
 #include <vector>
 
+#include "lodepng/lodepng.h"
+
 struct Vec3 {
     double x, y, z;
     Vec3() : x(0), y(0), z(0) {}
@@ -321,12 +323,24 @@ int main() {
         t.join();
     }
 
-    std::string file_name = "cosine_sampling_" + std::to_string(samples / 4 * 4) + ".ppm";
+    std::string file_name = "small_pt_" + std::to_string(samples) + ".png";
 
-    FILE *f = fopen(file_name.c_str(), "w"); // Write image to PPM file.
-    fprintf(f, "P3\n%d %d\n%d\n", width, height, 255);
+    std::vector<unsigned char> png_pixels(width * height * 4);
+
     for (int i = 0; i < width * height; i++) {
-        fprintf(f, "%d %d %d ", toInt(pixels[i].x), toInt(pixels[i].y), toInt(pixels[i].z));
+        png_pixels[4 * i + 0] = toInt(pixels[i].x);
+        png_pixels[4 * i + 1] = toInt(pixels[i].y);
+        png_pixels[4 * i + 2] = toInt(pixels[i].z);
+        png_pixels[4 * i + 3] = 255;
     }
-    std::cout << "output to `" << file_name << "`\n\n" << std::flush;
+
+    // Encode the image
+    // if there's an error, display it
+    if (unsigned error = lodepng::encode(file_name, png_pixels, width, height); error) {
+        std::cerr << "lodepng::encoder error " << error << ": " << lodepng_error_text(error)
+                  << std::endl;
+        throw std::runtime_error("lodepng::encode() fail");
+    }
+
+    std::cout << "image saved to `" << file_name << "`\n\n" << std::flush;
 }
