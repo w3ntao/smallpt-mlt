@@ -1,3 +1,5 @@
+#include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <random>
@@ -163,7 +165,6 @@ Vec3 trace(const Ray &camera_ray, Sampler &sampler) {
     auto ray = camera_ray;
 
     for (int depth = 0;; ++depth) {
-
         double t; // distance to intersection
         int hit_sphere_id = intersect(ray, t);
         if (hit_sphere_id < 0) {
@@ -182,13 +183,12 @@ Vec3 trace(const Ray &camera_ray, Sampler &sampler) {
             // russian roulette
             double probability_russian_roulette = clamp(throughput.max_component_val(), 0.1, 0.95);
 
-            if (sampler.generate() < probability_russian_roulette) {
-                // survive and enhanced
-                throughput *= (1.0 / probability_russian_roulette);
-            } else {
+            if (sampler.generate() >= probability_russian_roulette) {
                 // terminated
                 break;
             }
+            // survive and enhanced
+            throughput *= (1.0 / probability_russian_roulette);
         }
 
         if (obj.reflection_type == ReflectionType::diffuse) { // Ideal DIFFUSE reflection
@@ -286,10 +286,10 @@ void render(std::vector<Vec3> &pixels, std::stack<int> &job_list, std::mutex &mt
                 double r2 = 2 * sampler.generate();
                 double dy = r2 < 1 ? sqrt(r2) - 1 : 1 - sqrt(2 - r2);
 
-                Vec3 d = cx * (((0.5 + dx) / 2 + x) / width - 0.5) +
-                         cy * (((0.5 + dy) / 2 + y) / height - 0.5) + cam.d;
+                Vec3 d =
+                    cx * ((dx + x) / width - 0.5) + cy * ((dy + y - 20) / height - 0.5) + cam.d;
 
-                pixel_val = pixel_val + trace(Ray(cam.o + d * 140, d.norm()), sampler);
+                pixel_val += trace(Ray(cam.o + d * 140, d.norm()), sampler);
             } // Camera rays are pushed ^^^^^ forward to start in interior
 
             pixel_val = pixel_val * (1.0 / samples);
@@ -301,11 +301,14 @@ void render(std::vector<Vec3> &pixels, std::stack<int> &job_list, std::mutex &mt
 }
 
 int main() {
-    int width = 1024;
-    int height = 768;
+    const double ratio = 1.5;
+    const int width = 1024 * ratio;
+    const int height = 768 * ratio;
 
-    int samples = 100;
+    int num_samples = 64;
     auto pixels = std::vector<Vec3>(width * height);
+
+    auto start = std::chrono::system_clock::now();
 
     std::stack<int> job_list;
     for (int y = 0; y < height; y++) {
@@ -314,16 +317,23 @@ int main() {
 
     std::mutex mtx;
     std::vector<std::thread> threads;
-    for (int idx = 0; idx < std::thread::hardware_concurrency(); ++idx) {
-        threads.push_back(std::thread(render, std::ref(pixels), std::ref(job_list), std::ref(mtx),
-                                      samples, width, height));
-    }
+    int num_threads = std::thread::hardware_concurrency();
+    threads.reserve(num_threads);
 
+    for (int idx = 0; idx < num_threads; ++idx) {
+        threads.emplace_back(render, std::ref(pixels), std::ref(job_list), std::ref(mtx),
+                             num_samples, width, height);
+    }
     for (auto &t : threads) {
         t.join();
     }
 
-    std::string file_name = "small_pt_" + std::to_string(samples) + ".png";
+    const std::chrono::duration<double> duration{std::chrono::system_clock::now() - start};
+    std::cout << "rendering (" << num_samples << " spp) took " << std::fixed << std::setprecision(3)
+              << duration.count() << " seconds.\n"
+              << std::flush;
+
+    std::string file_name = "smallpt_cpu_" + std::to_string(num_samples) + ".png";
 
     std::vector<unsigned char> png_pixels(width * height * 4);
 
