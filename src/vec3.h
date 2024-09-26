@@ -52,6 +52,8 @@ struct Vec3 {
         y *= b.y;
         z *= b.z;
     }
+
+    Vec3 operator/(double b) const { return Vec3(x / b, y / b, z / b); }
 };
 
 inline Vec3 operator*(double f, const Vec3 &v) { return v * f; }

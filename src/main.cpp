@@ -1,12 +1,9 @@
 #include "kelement_mlt.h"
 #include "lodepng/lodepng.h"
-#include "sampler.h"
 #include "vec3.h"
 #include <climits>
 #include <iomanip>
 #include <iostream>
-#include <mutex>
-#include <stack>
 #include <thread>
 #include <vector>
 
@@ -236,9 +233,8 @@ PathSample generate_new_path(KelemenMLT &mlt, const int width, const int height)
 
 void render_with_selected_path(std::vector<Vec3> &image, KelemenMLT mlt, const int seed,
                                const PathSample &init_path, const double b,
-                               const double mutation_per_pixel, int width, int height) {
+                               const long long total_mutations, int width, int height) {
     RNG rng(seed);
-    const auto total_mutations = (long long)(mutation_per_pixel * width * height);
 
     const double p_large = 0.5;
     int num_accept_mutation = 0;
@@ -273,11 +269,6 @@ void render_with_selected_path(std::vector<Vec3> &image, KelemenMLT mlt, const i
             mlt.recover_samples();
         }
     }
-
-    const auto weight = 1.0 / mutation_per_pixel;
-    for (int i = 0; i < width * height; i++) {
-        image[i] = image[i] * weight;
-    }
 }
 
 void render_mlt(std::vector<Vec3> &pixels, int mutation_per_pixel, int width, int height) {
@@ -286,7 +277,7 @@ void render_mlt(std::vector<Vec3> &pixels, int mutation_per_pixel, int width, in
     RNG rng(INT_MAX / 4);
     KelemenMLT mlt(INT_MAX);
 
-    const int num_seed_paths = width * height / 4;
+    const int num_seed_paths = width * height;
     std::vector<PathSample> seed_paths(num_seed_paths);
     double sumI = 0.0;
     mlt.large_step = 1;
@@ -324,8 +315,14 @@ void render_mlt(std::vector<Vec3> &pixels, int mutation_per_pixel, int width, in
     auto start_render = std::chrono::system_clock::now();
 
     auto seed = 42;
-    render_with_selected_path(pixels, mlt, seed, seed_paths[selected_path_id], b,
-                              mutation_per_pixel, width, height);
+
+    const long long total_mutations = (long long)(width * height) * mutation_per_pixel;
+    render_with_selected_path(pixels, mlt, seed, seed_paths[selected_path_id], b, total_mutations,
+                              width, height);
+
+    for (int i = 0; i < width * height; i++) {
+        pixels[i] = pixels[i] / mutation_per_pixel;
+    }
 }
 
 int main() {
