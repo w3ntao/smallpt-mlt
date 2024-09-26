@@ -26,4 +26,4 @@ jobs:
     - name: render
       run:
         cd build;
-        ./smallpt-cpu;
+        ./smallpt-mlt;

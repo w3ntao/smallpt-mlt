@@ -19,10 +19,6 @@ class RNG {
     std::uniform_real_distribution<double> distribution;
 };
 
-// A Simple and Robust Mutation Strategy for the Metropolisを参照。
-// Kelemen style MLT用データ構造
-// Kelemen styleではパス生成に使う乱数の空間で変異させたりする。
-// その一つ一つのサンプルのデータ構造。
 struct PrimarySample {
     int modify_time;
     double value;
@@ -33,7 +29,7 @@ struct PrimarySample {
     }
 };
 
-struct KelemenMLT {
+struct PSSMLTSampler {
   private:
     RNG rng;
     int sample_idx;
@@ -41,9 +37,7 @@ struct KelemenMLT {
     std::vector<PrimarySample> samples;
     std::stack<PrimarySample> backup_samples;
 
-    // LuxRenderから拝借してきた変異関数
     inline double mutate_small_step(const double x) {
-        // small step mutation
         const double s1 = 1.0 / 512.0;
         const double s2 = 1.0 / 16.0;
         const double r = rng();
@@ -58,12 +52,11 @@ struct KelemenMLT {
     }
 
   public:
-    // 論文で使われているものとほぼ同じ
     int global_time;
     int large_step;
     int large_step_time;
 
-    KelemenMLT(int seed_val) : rng(seed_val) {
+    PSSMLTSampler(int seed_val) : rng(seed_val) {
         global_time = 0;
         large_step = 0;
         large_step_time = 0;
@@ -86,11 +79,9 @@ struct KelemenMLT {
         }
     }
 
-    // 通常の乱数のかわりにこれを使う
-    // 論文にのっているコードとほぼ同じ
     inline double next_sample() {
         if (samples.size() <= sample_idx) {
-            samples.resize(samples.size() * 1.5); // 拡張する
+            samples.resize(samples.size() * 1.5);
         }
 
         if (samples[sample_idx].modify_time < global_time) {

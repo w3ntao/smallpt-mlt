@@ -1,5 +1,5 @@
-#include "kelement_mlt.h"
 #include "lodepng/lodepng.h"
+#include "pss_mlt_sampler.h"
 #include "vec3.h"
 #include <climits>
 #include <iomanip>
@@ -16,12 +16,10 @@ struct PathSample {
     int x, y;
 
     Vec3 F;
-    double weight;
 
-    PathSample() : x(-1), y(-1), F(Vec3(0.0)), weight(NAN) {}
+    PathSample() : x(-1), y(-1), F(Vec3(0.0)) {}
 
-    PathSample(const int x_, const int y_, const Vec3 &F_, const double weight_)
-        : x(x_), y(y_), F(F_), weight(weight_) {}
+    PathSample(const int x_, const int y_, const Vec3 &F_) : x(x_), y(y_), F(F_) {}
 };
 
 enum class ReflectionType { diffuse, specular, Refractive }; // material types, used in radiance()
@@ -108,7 +106,7 @@ inline int intersect(const Ray &r, double &t) {
     return id;
 }
 
-Vec3 trace(const Ray &camera_ray, KelemenMLT &mlt) {
+Vec3 trace(const Ray &camera_ray, PSSMLTSampler &mlt) {
     Vec3 radiance(0.0, 0.0, 0.0);
     Vec3 throughput(1.0, 1.0, 1.0);
 
@@ -205,9 +203,7 @@ Vec3 trace(const Ray &camera_ray, KelemenMLT &mlt) {
     return radiance;
 }
 
-PathSample generate_new_path(KelemenMLT &mlt, const int width, const int height) {
-    const double weight = 4.0 * width * height;
-
+PathSample generate_new_path(PSSMLTSampler &mlt, const int width, const int height) {
     int x = mlt.next_sample() * width;
     x = x % width;
 
@@ -228,12 +224,12 @@ PathSample generate_new_path(KelemenMLT &mlt, const int width, const int height)
 
     auto c = trace(Ray(cam.o + d * 140, d.norm()), mlt);
 
-    return PathSample(x, y, c, weight);
+    return PathSample(x, y, c);
 }
 
-void render_with_selected_path(std::vector<Vec3> &image, KelemenMLT mlt, const int seed,
+void render_with_selected_path(std::vector<Vec3> &image, PSSMLTSampler mlt, const int seed,
                                const PathSample &init_path, const double b,
-                               const long long total_mutations, int width, int height) {
+                               const long long num_mutations, int width, int height) {
     RNG rng(seed);
 
     const double p_large = 0.5;
@@ -242,8 +238,7 @@ void render_with_selected_path(std::vector<Vec3> &image, KelemenMLT mlt, const i
 
     auto old_path = init_path;
 
-    for (long long i = 0; i < total_mutations; i++) {
-        // この辺も全部論文と同じ（Next()）
+    for (long long i = 0; i < num_mutations; i++) {
         mlt.init_sample_idx();
         mlt.large_step = rng() < p_large;
         PathSample new_path = generate_new_path(mlt, width, height);
@@ -275,7 +270,7 @@ void render_mlt(std::vector<Vec3> &pixels, int mutation_per_pixel, int width, in
     auto start = std::chrono::system_clock::now();
 
     RNG rng(INT_MAX / 4);
-    KelemenMLT mlt(INT_MAX);
+    PSSMLTSampler mlt(INT_MAX);
 
     const int num_seed_paths = width * height;
     std::vector<PathSample> seed_paths(num_seed_paths);
