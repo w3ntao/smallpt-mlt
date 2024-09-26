@@ -1,64 +1,30 @@
-#include <chrono>
+#include "kelement_mlt.h"
+#include "lodepng/lodepng.h"
+#include "sampler.h"
+#include "vec3.h"
+#include <climits>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
-#include <random>
 #include <stack>
 #include <thread>
 #include <vector>
 
-#include "lodepng/lodepng.h"
-
-struct Vec3 {
-    double x, y, z;
-    Vec3() : x(0), y(0), z(0) {}
-
-    Vec3(double _x, double _y, double _z) {
-        x = _x;
-        y = _y;
-        z = _z;
-    }
-
-    Vec3 operator+(const Vec3 &b) const { return Vec3(x + b.x, y + b.y, z + b.z); }
-
-    void operator+=(const Vec3 &b) {
-        x += b.x;
-        y += b.y;
-        z += b.z;
-    }
-
-    Vec3 operator-(const Vec3 &b) const { return Vec3(x - b.x, y - b.y, z - b.z); }
-
-    Vec3 operator*(double b) const { return Vec3(x * b, y * b, z * b); }
-
-    void operator*=(double b) {
-        x *= b;
-        y *= b;
-        z *= b;
-    }
-
-    Vec3 operator*(const Vec3 &b) const { return Vec3(x * b.x, y * b.y, z * b.z); }
-
-    void operator*=(const Vec3 &b) {
-        x *= b.x;
-        y *= b.y;
-        z *= b.z;
-    }
-
-    Vec3 norm() const { return *this * (1 / sqrt(x * x + y * y + z * z)); }
-
-    double dot(const Vec3 &b) const { return x * b.x + y * b.y + z * b.z; }
-
-    Vec3 cross(const Vec3 &b) const {
-        return Vec3(y * b.z - z * b.y, z * b.x - x * b.z, x * b.y - y * b.x);
-    }
-
-    double max_component_val() const { return x > y && x > z ? x : y > z ? y : z; }
-};
-
 struct Ray {
     Vec3 o, d;
     Ray(const Vec3 &o_, const Vec3 &d_) : o(o_), d(d_) {}
+};
+
+struct PathSample {
+    int x, y;
+
+    Vec3 F;
+    double weight;
+
+    PathSample() : x(-1), y(-1), F(Vec3(0.0)), weight(NAN) {}
+
+    PathSample(const int x_, const int y_, const Vec3 &F_, const double weight_)
+        : x(x_), y(y_), F(F_), weight(weight_) {}
 };
 
 enum class ReflectionType { diffuse, specular, Refractive }; // material types, used in radiance()
@@ -121,27 +87,14 @@ std::vector<Sphere> spheres = {
            ReflectionType::diffuse) // Lite
 };
 
-struct Sampler {
-    Sampler() {
-        uint64_t timeSeed = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-        std::seed_seq ss{uint32_t(timeSeed & 0xffffffff), uint32_t(timeSeed >> 32)};
-        rng.seed(ss);
-        distribution_0_1 = std::uniform_real_distribution<double>(0, 1);
-    }
-    void seed(int seed_val) { rng.seed(seed_val); }
-
-    double generate() { return distribution_0_1(rng); }
-
-  private:
-    std::mt19937_64 rng;
-    std::uniform_real_distribution<double> distribution_0_1;
-};
-
 inline double clamp(double x, double low, double high) {
     return x < low ? low : x > high ? high : x;
 }
 
-inline int toInt(double x) { return int(pow(clamp(x, 0, 1), 1 / 2.2) * 255 + .5); }
+inline int toInt(double x) {
+    // with gamma correction
+    return int(pow(clamp(x, 0, 1), 1 / 2.2) * 255 + .5);
+}
 
 inline int intersect(const Ray &r, double &t) {
     int id = -1;
@@ -158,13 +111,13 @@ inline int intersect(const Ray &r, double &t) {
     return id;
 }
 
-Vec3 trace(const Ray &camera_ray, Sampler &sampler) {
+Vec3 trace(const Ray &camera_ray, KelemenMLT &mlt) {
     Vec3 radiance(0.0, 0.0, 0.0);
     Vec3 throughput(1.0, 1.0, 1.0);
 
     auto ray = camera_ray;
 
-    for (int depth = 0;; ++depth) {
+    for (int depth = 0; depth < 10; ++depth) {
         double t; // distance to intersection
         int hit_sphere_id = intersect(ray, t);
         if (hit_sphere_id < 0) {
@@ -183,7 +136,7 @@ Vec3 trace(const Ray &camera_ray, Sampler &sampler) {
             // russian roulette
             double probability_russian_roulette = clamp(throughput.max_component_val(), 0.1, 0.95);
 
-            if (sampler.generate() >= probability_russian_roulette) {
+            if (mlt.next_sample() >= probability_russian_roulette) {
                 // terminated
                 break;
             }
@@ -192,8 +145,8 @@ Vec3 trace(const Ray &camera_ray, Sampler &sampler) {
         }
 
         if (obj.reflection_type == ReflectionType::diffuse) { // Ideal DIFFUSE reflection
-            double r1 = 2 * M_PI * sampler.generate();
-            double r2 = sampler.generate();
+            double r1 = 2 * M_PI * mlt.next_sample();
+            double r2 = mlt.next_sample();
             double r2s = sqrt(r2);
             Vec3 w = normal;
             Vec3 u = (fabs(w.x) > 0.1 ? Vec3(0, 1, 0) : Vec3(1, 0, 0)).cross(w).norm();
@@ -240,7 +193,7 @@ Vec3 trace(const Ray &camera_ray, Sampler &sampler) {
         double TP = Tr / (1 - probability_reflect);
 
         // refract or reflect
-        if (sampler.generate() < probability_reflect) {
+        if (mlt.next_sample() < probability_reflect) {
             // reflect
             ray = spawn_ray_reflect;
             throughput *= RP;
@@ -250,107 +203,169 @@ Vec3 trace(const Ray &camera_ray, Sampler &sampler) {
         // refract
         ray = Ray(hit_point, t_dir); // Ideal dielectric REFRACTION
         throughput *= TP;
-        continue;
     }
 
     return radiance;
 }
 
-void render(std::vector<Vec3> &pixels, std::stack<int> &job_list, std::mutex &mtx, int samples,
-            int width, int height) {
+PathSample generate_new_path(KelemenMLT &mlt, const int width, const int height) {
+    const double weight = 4.0 * width * height;
+
+    int x = mlt.next_sample() * width;
+    x = x % width;
+
+    int y = mlt.next_sample() * height;
+    y = y % height;
+
     Ray cam(Vec3(50, 52, 295.6), Vec3(0, -0.042612, -1).norm()); // cam pos, dir
     Vec3 cx = Vec3(width * 0.5135 / height, 0, 0);
     Vec3 cy = cx.cross(cam.d).norm() * 0.5135;
 
-    Sampler sampler;
+    const double r1 = 2.0 * mlt.next_sample();
+    const double r2 = 2.0 * mlt.next_sample();
 
-    while (true) {
-        mtx.lock();
-        if (job_list.empty()) {
-            mtx.unlock();
-            return;
+    double dx = r1 < 1 ? sqrt(r1) - 1 : 1 - sqrt(2 - r1);
+    double dy = r2 < 1 ? sqrt(r2) - 1 : 1 - sqrt(2 - r2);
+
+    Vec3 d = cx * ((dx + x) / width - 0.5) + cy * ((dy + y - 20) / height - 0.5) + cam.d;
+
+    auto c = trace(Ray(cam.o + d * 140, d.norm()), mlt);
+
+    return PathSample(x, y, c, weight);
+}
+
+void render_with_selected_path(std::vector<Vec3> &image, KelemenMLT mlt, const int seed,
+                               const PathSample &init_path, const double b,
+                               const double mutation_per_pixel, int width, int height) {
+    RNG rng(seed);
+    const auto total_mutations = (long long)(mutation_per_pixel * width * height);
+
+    const double p_large = 0.5;
+    int num_accept_mutation = 0;
+    int num_reject_mutation = 0;
+
+    auto old_path = init_path;
+
+    for (long long i = 0; i < total_mutations; i++) {
+        // この辺も全部論文と同じ（Next()）
+        mlt.init_sample_idx();
+        mlt.large_step = rng() < p_large;
+        PathSample new_path = generate_new_path(mlt, width, height);
+
+        double accept_prob = std::min(1.0, new_path.F.luminance() / old_path.F.luminance());
+        const double new_path_weight =
+            (accept_prob + mlt.large_step) / (new_path.F.luminance() / b + p_large);
+        const double old_path_weight = (1.0 - accept_prob) / (old_path.F.luminance() / b + p_large);
+
+        image[new_path.y * width + new_path.x] += new_path_weight * new_path.F;
+        image[old_path.y * width + old_path.x] += old_path_weight * old_path.F;
+
+        if (rng() < accept_prob) {
+            num_accept_mutation++;
+            old_path = new_path;
+            if (mlt.large_step) {
+                mlt.large_step_time = mlt.global_time;
+            }
+            mlt.global_time++;
+            mlt.clear_backup_samples();
+        } else {
+            num_reject_mutation++;
+            mlt.recover_samples();
         }
-        auto y = job_list.top();
-        job_list.pop();
-        mtx.unlock();
+    }
 
-        for (int x = 0; x < width; x++) {
-            int pixel_index = (height - y - 1) * width + x;
-            sampler.seed(pixel_index);
-            auto pixel_val = Vec3(0.0, 0.0, 0.0);
-
-            for (int s = 0; s < samples; s++) {
-                double r1 = 2 * sampler.generate();
-                double dx = r1 < 1 ? sqrt(r1) - 1 : 1 - sqrt(2 - r1);
-
-                double r2 = 2 * sampler.generate();
-                double dy = r2 < 1 ? sqrt(r2) - 1 : 1 - sqrt(2 - r2);
-
-                Vec3 d =
-                    cx * ((dx + x) / width - 0.5) + cy * ((dy + y - 20) / height - 0.5) + cam.d;
-
-                pixel_val += trace(Ray(cam.o + d * 140, d.norm()), sampler);
-            } // Camera rays are pushed ^^^^^ forward to start in interior
-
-            pixel_val = pixel_val * (1.0 / samples);
-
-            pixels[pixel_index] =
-                Vec3(clamp(pixel_val.x, 0, 1), clamp(pixel_val.y, 0, 1), clamp(pixel_val.z, 0, 1));
-        }
+    const auto weight = 1.0 / mutation_per_pixel;
+    for (int i = 0; i < width * height; i++) {
+        image[i] = image[i] * weight;
     }
 }
 
-int main() {
-    const double ratio = 1.5;
-    const int width = 1024 * ratio;
-    const int height = 768 * ratio;
-
-    int num_samples = 64;
-    auto pixels = std::vector<Vec3>(width * height);
-
+void render_mlt(std::vector<Vec3> &pixels, int mutation_per_pixel, int width, int height) {
     auto start = std::chrono::system_clock::now();
 
-    std::stack<int> job_list;
-    for (int y = 0; y < height; y++) {
-        job_list.push(y);
+    RNG rng(INT_MAX / 4);
+    KelemenMLT mlt(INT_MAX);
+
+    const int num_seed_paths = width * height / 4;
+    std::vector<PathSample> seed_paths(num_seed_paths);
+    double sumI = 0.0;
+    mlt.large_step = 1;
+    for (int i = 0; i < num_seed_paths; i++) {
+        mlt.init_sample_idx();
+        PathSample sample = generate_new_path(mlt, width, height);
+
+        mlt.global_time++;
+        mlt.clear_backup_samples();
+
+        sumI += sample.F.luminance();
+        seed_paths[i] = sample;
     }
 
-    std::mutex mtx;
-    std::vector<std::thread> threads;
-    int num_threads = std::thread::hardware_concurrency();
-    threads.reserve(num_threads);
-
-    for (int idx = 0; idx < num_threads; ++idx) {
-        threads.emplace_back(render, std::ref(pixels), std::ref(job_list), std::ref(mtx),
-                             num_samples, width, height);
+    // First pass is done, using importance sampling based on luminance values.
+    // TODO: why is this selection important?
+    int selected_path_id = -1;
+    const double threshold = rng() * sumI;
+    double accumulated_importance = 0.0;
+    for (int i = 0; i < num_seed_paths; i++) {
+        accumulated_importance += seed_paths[i].F.luminance();
+        if (accumulated_importance >= threshold) {
+            selected_path_id = i;
+            break;
+        }
     }
-    for (auto &t : threads) {
-        t.join();
-    }
 
-    const std::chrono::duration<double> duration{std::chrono::system_clock::now() - start};
-    std::cout << "rendering (" << num_samples << " spp) took " << std::fixed << std::setprecision(3)
-              << duration.count() << " seconds.\n"
+    const std::chrono::duration<double> duration_initial{std::chrono::system_clock::now() - start};
+    std::cout << "building initial paths took " << std::fixed << std::setprecision(3)
+              << duration_initial.count() << " seconds.\n"
               << std::flush;
 
-    std::string file_name = "smallpt_cpu_" + std::to_string(num_samples) + ".png";
+    const double b = sumI / num_seed_paths;
 
-    std::vector<unsigned char> png_pixels(width * height * 4);
+    auto start_render = std::chrono::system_clock::now();
 
-    for (int i = 0; i < width * height; i++) {
-        png_pixels[4 * i + 0] = toInt(pixels[i].x);
-        png_pixels[4 * i + 1] = toInt(pixels[i].y);
-        png_pixels[4 * i + 2] = toInt(pixels[i].z);
-        png_pixels[4 * i + 3] = 255;
+    auto seed = 42;
+    render_with_selected_path(pixels, mlt, seed, seed_paths[selected_path_id], b,
+                              mutation_per_pixel, width, height);
+}
+
+int main() {
+    const int width = 1280;
+    const int height = 960;
+
+    for (auto mutation_per_pixel : {16, 32, 64, 128, 256, 512}) {
+        auto pixels = std::vector<Vec3>(width * height);
+
+        auto start = std::chrono::system_clock::now();
+
+        render_mlt(pixels, mutation_per_pixel, width, height);
+
+        const std::chrono::duration<double> duration{std::chrono::system_clock::now() - start};
+        std::cout << "rendering (" << mutation_per_pixel << " spp) took " << std::fixed
+                  << std::setprecision(3) << duration.count() << " seconds.\n"
+                  << std::flush;
+
+        std::vector<unsigned char> png_pixels(width * height * 4);
+
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                int png_idx = y * width + x;
+                int idx = (height - 1 - y) * width + x;
+
+                png_pixels[4 * png_idx + 0] = toInt(pixels[idx].x);
+                png_pixels[4 * png_idx + 1] = toInt(pixels[idx].y);
+                png_pixels[4 * png_idx + 2] = toInt(pixels[idx].z);
+                png_pixels[4 * png_idx + 3] = 255;
+            }
+        }
+
+        std::string file_name = "smallpt_" + std::to_string(mutation_per_pixel) + ".png";
+
+        if (unsigned error = lodepng::encode(file_name, png_pixels, width, height); error) {
+            std::cerr << "lodepng::encoder error " << error << ": " << lodepng_error_text(error)
+                      << std::endl;
+            throw std::runtime_error("lodepng::encode() fail");
+        }
+
+        std::cout << "image saved to `" << file_name << "`\n\n" << std::flush;
     }
-
-    // Encode the image
-    // if there's an error, display it
-    if (unsigned error = lodepng::encode(file_name, png_pixels, width, height); error) {
-        std::cerr << "lodepng::encoder error " << error << ": " << lodepng_error_text(error)
-                  << std::endl;
-        throw std::runtime_error("lodepng::encode() fail");
-    }
-
-    std::cout << "image saved to `" << file_name << "`\n\n" << std::flush;
 }

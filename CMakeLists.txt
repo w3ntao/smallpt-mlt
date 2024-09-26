@@ -4,7 +4,7 @@ if (NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
 endif ()
 
-set(PROJ_NAME "smallpt-cpu")
+set(PROJ_NAME "smallpt-mlt")
 
 project(${PROJ_NAME})
 
